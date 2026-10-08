@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Mi VR 360</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #000; font-family: system-ui, sans-serif; touch-action: none; }
+  canvas { display: block; }
+  #inicio {
+    position: fixed; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 14px;
+    background: #111; color: #fff; text-align: center; padding: 20px; z-index: 10;
+  }
+  #inicio button {
+    font-size: 20px; padding: 14px 28px; border: 0; border-radius: 12px;
+    background: #4f8cff; color: #fff;
+  }
+  #inicio button.sec { background: #333; font-size: 16px; }
+  #inicio p { max-width: 420px; opacity: .8; margin: 0; }
+  #linea { position: fixed; top: 0; bottom: 0; left: 50%; width: 2px; margin-left: -1px; background: #000; display: none; z-index: 5; }
+</style>
+</head>
+<body>
+
+<div id="inicio">
+  <h2>Mi VR 360</h2>
+  <p>Pon el celular en horizontal, toca el botón y luego mételo en tu visor de cartón.</p>
+  <button id="btnVR">Iniciar VR (visor)</button>
+  <button id="btnNormal" class="sec">Ver en pantalla normal</button>
+</div>
+<div id="linea"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+const IMAGEN = 'foto360.jpg';   // <- nombre de tu foto 360
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(80, 1, 0.1, 1100);
+camera.rotation.order = 'YXZ';
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.outputEncoding = THREE.sRGBEncoding;
+renderer.autoClear = false;
+document.body.appendChild(renderer.domElement);
+
+// Esfera con la foto por dentro
+const geo = new THREE.SphereGeometry(500, 64, 48);
+geo.scale(-1, 1, 1);
+const tex = new THREE.TextureLoader().load(IMAGEN);
+tex.encoding = THREE.sRGBEncoding;
+tex.minFilter = THREE.LinearFilter;
+tex.generateMipmaps = false;
+scene.add(new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ map: tex })));
+
+let modoVR = false;
+let usaGiro = false;
+
+function ajustar() {
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  const w = window.innerWidth, h = window.innerHeight;
+  camera.aspect = modoVR ? (w / 2) / h : w / h;
+  camera.updateProjectionMatrix();
+}
+window.addEventListener('resize', ajustar);
+ajustar();
+
+// ----- Giroscopio -----
+const q1 = new THREE.Quaternion(-Math.sqrt(0.5), 0, 0, Math.sqrt(0.5));
+const q0 = new THREE.Quaternion();
+const euler = new THREE.Euler();
+const zee = new THREE.Vector3(0, 0, 1);
+const qGiro = new THREE.Quaternion();
+let offsetYaw = null;       // para que al iniciar mires al frente de la foto
+const qOffset = new THREE.Quaternion();
+
+function anguloPantalla() {
+  if (screen.orientation && typeof screen.orientation.angle === 'number') return screen.orientation.angle;
+  return window.orientation || 0;
+}
+
+function onOrientacion(e) {
+  if (e.alpha === null) return;
+  const d = THREE.MathUtils.degToRad;
+  usaGiro = true;
+  euler.set(d(e.beta), d(e.alpha), -d(e.gamma), 'YXZ');
+  qGiro.setFromEuler(euler);
+  qGiro.multiply(q1);
+  qGiro.multiply(q0.setFromAxisAngle(zee, -d(anguloPantalla())));
+  if (offsetYaw === null) {
+    const y = new THREE.Euler().setFromQuaternion(qGiro, 'YXZ').y;
+    offsetYaw = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), -y);
+  }
+  camera.quaternion.copy(offsetYaw).multiply(qGiro);
+}
+
+// ----- Arrastrar con el dedo / mouse (si no hay giroscopio) -----
+let lon = 0, lat = 0, arrastrando = false, px = 0, py = 0;
+renderer.domElement.addEventListener('pointerdown', e => { arrastrando = true; px = e.clientX; py = e.clientY; });
+window.addEventListener('pointerup', () => arrastrando = false);
+window.addEventListener('pointermove', e => {
+  if (!arrastrando || usaGiro) return;
+  lon -= (e.clientX - px) * 0.2;
+  lat += (e.clientY - py) * 0.2;
+  lat = Math.max(-85, Math.min(85, lat));
+  px = e.clientX; py = e.clientY;
+});
+
+// ----- Render -----
+function animar() {
+  requestAnimationFrame(animar);
+  if (!usaGiro) {
+    camera.rotation.set(THREE.MathUtils.degToRad(lat), THREE.MathUtils.degToRad(-lon), 0);
+  }
+  const w = window.innerWidth, h = window.innerHeight;
+  renderer.clear();
+  renderer.setScissorTest(true);
+  if (modoVR) {
+    renderer.setViewport(0, 0, w / 2, h);
+    renderer.setScissor(0, 0, w / 2, h);
+    renderer.render(scene, camera);
+    renderer.setViewport(w / 2, 0, w / 2, h);
+    renderer.setScissor(w / 2, 0, w / 2, h);
+    renderer.render(scene, camera);
+  } else {
+    renderer.setViewport(0, 0, w, h);
+    renderer.setScissor(0, 0, w, h);
+    renderer.render(scene, camera);
+  }
+}
+animar();
+
+// ----- Botones -----
+async function iniciar(vr) {
+  // iPhone: hay que pedir permiso al giroscopio
+  if (typeof DeviceOrientationEvent !== 'undefined' &&
+      typeof DeviceOrientationEvent.requestPermission === 'function') {
+    try {
+      const r = await DeviceOrientationEvent.requestPermission();
+      if (r === 'granted') window.addEventListener('deviceorientation', onOrientacion);
+    } catch (err) { console.error(err); }
+  } else {
+    window.addEventListener('deviceorientation', onOrientacion);
+  }
+
+  modoVR = vr;
+  document.getElementById('linea').style.display = vr ? 'block' : 'none';
+  document.getElementById('inicio').style.display = 'none';
+  ajustar();
+
+  // Pantalla completa y horizontal (no todos los navegadores lo permiten)
+  try {
+    if (document.documentElement.requestFullscreen) await document.documentElement.requestFullscreen();
+    if (screen.orientation && screen.orientation.lock) await screen.orientation.lock('landscape');
+  } catch (e) {}
+  // Evitar que se apague la pantalla
+  try { if (navigator.wakeLock) await navigator.wakeLock.request('screen'); } catch (e) {}
+}
+document.getElementById('btnVR').addEventListener('click', () => iniciar(true));
+document.getElementById('btnNormal').addEventListener('click', () => iniciar(false));
+</script>
+</body>
+</html>
